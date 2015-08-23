@@ -21,6 +21,7 @@ var (
 func Init(db *bolt.DB, _port ...string) {
 	DB = db
 
+	gin.SetMode(gin.ReleaseMode)
 	router := gin.Default()
 	router.Use(gzip.Gzip(gzip.DefaultCompression))
 	router.GET("/", bucketList)
