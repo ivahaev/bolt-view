@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/contrib/gzip"
 	"github.com/gin-gonic/gin"
 	"net/http"
+	"strings"
 )
 
 var DB *bolt.DB
@@ -27,7 +28,7 @@ func Init(db *bolt.DB, _port ...string) {
 	router.GET("/", bucketList)
 	router.GET("/rest/:bucket/:action", restGetHandler)
 	router.POST("/rest", restPostHandler)
-	router.GET("/bucket/:name", bucketContent)
+	router.GET("/bucket/:name/*nested", bucketContent)
 
 	port := "3333"
 	if len(_port) > 0 && _port[0] != "" {
@@ -102,7 +103,7 @@ func bucketList(c *gin.Context) {
 	html += `<html><head><meta charset="UTF-8"></head><body>`
 	html += `<h1>Bucket list:</h1>`
 	for _, b := range buckets {
-		html += `<div><a href="/bucket/` + b + `">` + b + `</a></div>`
+		html += `<div><a href="/bucket/` + b + `/">` + b + `</a></div>`
 	}
 	html += `</body></html>`
 	c.Data(200, "text/html", []byte(html))
@@ -110,26 +111,36 @@ func bucketList(c *gin.Context) {
 
 func bucketContent(c *gin.Context) {
 	name := c.Param("name")
+	nestedName := c.Param("nested")
+	nested := []string{}
 	content := map[string]string{}
 	DB.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(name))
 		if b == nil {
 			return errors.New("Wrong bucket")
 		}
-		b.ForEach(func(k, v []byte) error {
-			var out bytes.Buffer
-			json.Indent(&out, v, "", "\t")
-			content[string(k)] = out.String()
+		if nestedName == "" || nestedName == "/" {
+			content, nested = getBucketContent(b)
 			return nil
-		})
-
+		}
+		nb := b.Bucket([]byte(strings.TrimLeft(nestedName, "/")))
+		if nb == nil {
+			return errors.New("Wrong bucket")
+		}
+		content, nested = getBucketContent(nb)
 		return nil
 	})
 	var html string
 	html += `<html><head><meta charset="UTF-8"></head><body>`
 	html += `<h1>Bucket's "` + name + `" content:</h1>`
+	if len(nested) > 0 {
+		html += `<h2>Nested buckets:</h2>`
+	}
+	for _, b := range nested {
+		html += `<div><a href="/bucket/` + name + `/` + b + `">` + b + `</a></div>`
+	}
 	for k, v := range content {
-		html += `<div><h2>` + k + `:</h2><pre>` + v + `</pre></div>`
+		html += `<div><h3>` + k + `:</h3><pre>` + v + `</pre></div>`
 	}
 	html += `</body></html>`
 	c.Data(200, "text/html", []byte(html))
@@ -182,6 +193,29 @@ func getAll(bucket string) (result [][]byte, err error) {
 		return nil
 	})
 	return
+}
+
+func getBucketContent(b *bolt.Bucket) (content map[string]string, nested []string) {
+	content = map[string]string{}
+	nested = []string{}
+	b.ForEach(func(k, v []byte) error {
+		if len(v) != 0 {
+			var out bytes.Buffer
+			json.Indent(&out, v, "", "\t")
+			content[string(k)] = out.String()
+			return nil
+		}
+		// may be k is a bucket
+		nb := b.Bucket(k)
+		if nb != nil {
+			nested = append(nested, string(k))
+		} else {
+			content[string(k)] = ""
+		}
+		return nil
+	})
+
+	return content, nested
 }
 
 func newUUIDv4() string {
